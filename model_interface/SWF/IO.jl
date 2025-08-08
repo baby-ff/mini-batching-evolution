@@ -2,7 +2,7 @@ function setup_outdir(s::Int,set::Settings,init_cond::String)
     Delta, F0, nu, N, M, B, L, K, pk, p_inherit = set.Delta, set.F0, set.nu, set.N, set.M, set.B, set.L, set.K, set.pk, set.p_inherit 
     consmatrix, fieldmatrix = set.consmatrix, set.fieldmatrix
     
-    dir = "prova_interface/data/persistent/"
+    dir = "model_interface/data/persistent/"
     dir = dir*("/Delta$(Delta)_F0$(F0)_nu$(nu)_N$(N)_M$(M)_B$(B)_L$(L)_pers$(p_inherit)/half_fixed/long_K$(K)_pk$(pk)/")
     dir = dir*init_cond
     dir = dir*"/sample_$(s)"
