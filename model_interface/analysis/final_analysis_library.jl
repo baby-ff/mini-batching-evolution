@@ -5,23 +5,6 @@ function bin_to_int(str::Vector{Int})
     return x
 end;
 
-function fitvar(spec::Int,means::Matrix{Float64},vars::Matrix{Float64},L::Int)
-#extracts fitness,genralization,variance and learning proxy of each species
-        
-    seq = digits(spec,base=2,pad=L)
-    norm = sum(seq)
-    am = argmax(means)[2]
-    if norm==0
-        fit = mean(means)
-        varfit = mean(vars)
-    else
-        fit = (means*seq)[1]/norm
-        varfit = (vars*seq)[1]/norm
-    end
-        
-    return fit, varfit
-end
-
 function getsnap(filename::String)
     #reads snapshot data
         
@@ -34,28 +17,7 @@ function getsnap(filename::String)
     return (fit[si],cumsum(abund[si]),gen[si],abund[si],seq[si])
 end;
 
-function compute_var(seq::Vector{Any},folder::String)
-    #computes fitness variance of seq
-        
-    sfolder = folder*"zeros/sample_1/"
-    fieldmatrix = readdlm(sfolder*"fieldmatrix.txt",header=true)[1][:,2:end]
-    vars = var(fieldmatrix,dims=1)
-        
-    v = []
-    for s in seq
-        d = digits(s,base=2,pad=L)
-        norm = sum(d)
-        if norm==0
-            varfit = mean(vars)
-        else
-            varfit = (vars*d)[1]/norm
-        end            
-        push!(v,varfit)
-    end
-    return v
-end;
-
-function prf(folder::String,snaps::String,tini::Int,nsteps::Int,ncopies::Int,dt::Int)
+function prf(folder::String,snaps::String,tini::Int,nsteps::Int,ncopies::Int,dt::Int,V::Vector{Any})
     popV = []
     popX = []
     popY = []
@@ -67,7 +29,7 @@ function prf(folder::String,snaps::String,tini::Int,nsteps::Int,ncopies::Int,dt:
             sfolder = initfolder*"/sample_$(n)/"
             for t in tini:nsteps
                 x,_,y,ab,seq = getsnap(sfolder*snaps*"/snap_t$(t*dt).txt")
-                v = compute_var(seq,folder)
+                v = [V[s+1] for s in seq]
                 w = weights(Int.(ab))
                 mpv = mean(v,w)
                 mpx = mean(x,w)
@@ -123,7 +85,7 @@ function extract_potential(Fvec::Vector{Float64},Dvec::Vector{Float64},Dvec0::Ve
     return Float64.(D),Float64.(D0),Float64.(T),Float64.(T0),Float64.(Fx),Float64.(Pot)
 end;
 
-function get_FVG(means::Matrix{Float64},vars::Matrix{Float64},L::Int64,K::Int64)
+function get_FVG(means::Matrix{Float64},cij::Matrix{Float64},L::Int64,K::Int64)
     test = reshape(append!(ones(K),zeros(L-K)),(1,L))
     F = []
     V = []
@@ -132,11 +94,11 @@ function get_FVG(means::Matrix{Float64},vars::Matrix{Float64},L::Int64,K::Int64)
         seq = digits(spec,base=2,pad=L)
         norm = sum(seq)
         if norm==0
-            push!(V,mean(vars))
             push!(G,K/L)
             push!(F,mean(means))
+            push!(V,ones(L)'*cij*ones(L)./(L^2))
         else
-            var = (vars*seq)[1]/norm
+            var = (seq'*cij*seq)./(norm^2)
             gen = (test*seq)[1]/norm
             fit = (means*seq)[1]/norm
             push!(V,var)
@@ -503,4 +465,62 @@ function panelF(folder::String,F,G,N,ncopies,L,nsteps,tini,dt)
     end
 
     return ab, ab_ref, genab, genab_ref, uni_list, gen_uni
+end;
+
+function get_data(w::Float64,Nmax::Int64,V0::Float64)
+    inside_fp = Float64[]
+    inside_ext = Float64[]
+    Narr_fp = Float64[]
+    Narr_ext = Float64[]
+    for N in range(2,Nmax)
+        #fixed points
+        c0 = N*s - w 
+        c1 = N*s^2 - 8*N*nu 
+        c2 = -4*N*s + 4*w - 8*N*s*nu
+        c3 = -4*N*s^2
+
+        R = roots([c0,c1,c2,c3])
+        r = real.(R[findall(x->isreal(x),R)])
+        rapp = r[findall(x->x^2<=1/4,r)]
+        append!(inside_fp,rapp)
+        append!(Narr_fp,N*ones(length(rapp)))
+
+        #extrema
+        q0 = N*s - s*V0 - w
+        q1 = 4 + 2*N*s^2 + 4*V0 - (-2 + s)*w - 8*N*nu
+        q2 = -4*N*s + N*s^3 + 4*(s*(3 + 2*V0) + w) - 16*N*s*nu
+        q3 = -8*N*s^2 + 4*(3*s^2 + (-4 + s)*w) - 8*N*s^2*nu
+        q4 = -4*N*s^3 + 4*s*(s^2 - 2*w)
+
+        Q = roots([q0,q1,q2,q3,q4])
+        q = real.(Q[findall(x->isreal(x),Q)])
+        qapp = q[findall(x->x^2<=1/4,q)]
+        append!(inside_ext,qapp)
+        append!(Narr_ext,N*ones(length(qapp)))
+    end
+    return inside_fp, inside_ext,Narr_fp, Narr_ext
+end; 
+
+function num(y::Float64,N::Int)
+    return (1 + s*y)^(2*N*(1 - 8*nu/(4 - s^2)))*(1 - 2*y)^(4*N*nu/(2 + s) - 1)*(1 + 2*y)^(4*N*nu/(2 - s) - 1) 
+end;
+
+function P(y::Float64,N::Int)
+    x, w = gausslegendre(3)
+    x = x.*0.5
+    den = dot(w,num.(x,N))
+    return num(y,N)/den
+end;
+
+function get_avg_trajs(initfolder::String,ncopies::Int)
+    F, _, Fref, _ = get_obs_track(initfolder*"sample_1/")
+    for n in 2:ncopies
+        f, _, fref, _ = get_obs_track(initfolder*"sample_$(n)/")
+        if length(f)!=length(F)
+            println(initfolder)
+        end
+        F.+=f
+        Fref.+=fref
+    end
+    return F./ncopies, Fref./ncopies
 end;
